@@ -1,0 +1,26 @@
+name: Verificacoes do projeto
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obter codigo
+        uses: actions/checkout@v6
+      - name: Configurar Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Instalar dependencias pelo lockfile
+        run: npm ci
+      - name: Verificar sintaxe
+        run: npm run check
+      - name: Testar logica do prototipo
+        run: npm test

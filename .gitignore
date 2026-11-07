@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.vscode/
+coverage/
+*.sql.bak
+*.dump
+*.backup
+.DS_Store
+Thumbs.db

@@ -1,0 +1,14 @@
+erDiagram
+    USUARIO ||--o{ ENDERECO : possui
+    USUARIO ||--o| CARRINHO : possui
+    CATEGORIA o|--o{ PRODUTO : classifica
+    CARRINHO ||--o{ ITEM_CARRINHO : contem
+    PRODUTO ||--o{ ITEM_CARRINHO : selecionado
+    USUARIO ||--o{ PEDIDO : realiza
+    ENDERECO ||--o{ PEDIDO : origina_destino_historico
+    PEDIDO ||--|{ ITEM_PEDIDO : contem
+    PRODUTO ||--o{ ITEM_PEDIDO : comprado
+    PEDIDO ||--o{ TENTATIVA_PAGAMENTO : possui
+    TENTATIVA_PAGAMENTO ||--o{ EVENTO_PAGAMENTO : recebe
+    PEDIDO ||--|{ HISTORICO_PEDIDO : registra
+    USUARIO o|--o{ HISTORICO_PEDIDO : responsavel

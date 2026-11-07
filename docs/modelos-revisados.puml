@@ -1,0 +1,224 @@
+@startuml casos_de_uso
+left to right direction
+actor Visitante
+actor Cliente
+actor Funcionario
+actor "Provedor de pagamento" as Provedor
+Cliente --|> Visitante
+rectangle "Aplicação web de cupcakes" {
+ usecase "UC01 Gerenciar acesso" as UC01
+ usecase "UC02 Consultar catálogo" as UC02
+ usecase "UC03 Gerenciar sacola" as UC03
+ usecase "UC04 Realizar pedido" as UC04
+ usecase "UC05 Processar pagamento" as UC05
+ usecase "UC06 Acompanhar pedido" as UC06
+ usecase "UC07 Gerenciar catálogo" as UC07
+ usecase "UC08 Atualizar andamento" as UC08
+}
+Visitante -- UC01
+Visitante -- UC02
+Visitante -- UC03
+Funcionario -- UC01
+Funcionario -- UC06
+Funcionario -- UC07
+Funcionario -- UC08
+Cliente -- UC04
+Cliente -- UC06
+Cliente -- UC05
+UC04 ..> UC05 : <<include>>
+Provedor -- UC05
+note bottom of UC03
+ Sacola visitante em memória.
+ Após login, reconciliar com carrinho persistido.
+end note
+@enduml
+
+@startuml classes_de_persistencia
+hide circle
+class Usuario {
+ id: Integer
+ nome, email, senhaHash: String
+ telefone: String [0..1]
+ papel: PapelUsuario
+ ativo: Boolean
+ criadoEm: DateTime
+}
+class Endereco {
+ id: Integer
+ destinatario, cep, logradouro, numero: String
+ complemento: String [0..1]
+ bairro, cidade, uf: String
+ ativo: Boolean
+ criadoEm: DateTime
+}
+class Categoria {
+ id: Integer
+ nome: String
+}
+class Produto {
+ id: Integer
+ nome, descricao, ingredientes, alergenicos: String
+ imagemUrl: String [0..1]
+ preco: Decimal
+ estoqueFisico: Integer
+ estoqueReservado: Integer <<cache>>
+ /disponivel: Integer
+ ativo: Boolean
+ criadoEm: DateTime
+}
+class Carrinho {
+ id: Integer
+ atualizadoEm: DateTime
+}
+class ItemCarrinho {
+ quantidade: Integer
+}
+class Pedido {
+ id: Integer
+ status: StatusPedido
+ enderecoEntrega: SnapshotEndereco
+ subtotal: Decimal <<cache>>
+ taxaEntrega: Decimal
+ /total: Decimal
+ chaveIdempotencia: UUID
+ criadoEm, reservaAte: DateTime
+ versao: Integer
+}
+class ItemPedido {
+ nomeProduto: String
+ quantidade: Integer
+ precoUnitario: Decimal
+ /subtotal: Decimal
+}
+class TentativaPagamento {
+ id: Integer
+ provedor: String
+ referenciaExterna: String [0..1]
+ chaveIdempotencia: UUID
+ valor: Decimal
+ status: StatusPagamento
+ estornoPendente: Boolean
+ criadoEm, atualizadoEm: DateTime
+}
+class EventoPagamento {
+ id: Integer
+ eventoExternoId, tipo: String
+ recebidoEm: DateTime
+ processadoEm: DateTime [0..1]
+}
+class HistoricoPedido {
+ id: Integer
+ status: StatusPedido
+ origem: String
+ criadoEm: DateTime
+}
+Usuario "1" -- "0..*" Endereco
+Usuario "1" -- "0..1" Carrinho
+Carrinho "1" *-- "0..*" ItemCarrinho
+Produto "1" -- "0..*" ItemCarrinho
+Categoria "0..1" -- "0..*" Produto
+Usuario "1" -- "0..*" Pedido
+Endereco "1" -- "0..*" Pedido : origem
+Pedido "1" *-- "1..*" ItemPedido
+Produto "1" -- "0..*" ItemPedido
+Pedido "1" -- "0..*" TentativaPagamento
+TentativaPagamento "1" -- "0..*" EventoPagamento
+Pedido "1" *-- "1..*" HistoricoPedido
+Usuario "0..1" -- "0..*" HistoricoPedido : responsavel
+note bottom of Pedido
+ SnapshotEndereco é um objeto valor embutido em pedidos,
+ não uma décima segunda tabela. Itens e histórico mínimos
+ são garantidos pela transação de fechamento, a implementar.
+end note
+@enduml
+
+@startuml sequencia_checkout
+actor Cliente
+boundary App
+control ServicoPedido
+database PostgreSQL
+control ServicoPagamento
+actor Provedor
+Cliente -> App : confirmar resumo
+App -> ServicoPedido : fechar(chave, endereco)
+group transação na mesma conexão
+ServicoPedido -> PostgreSQL : bloquear carrinho e buscar chave
+alt pedido existente e pertencente ao cliente
+PostgreSQL --> ServicoPedido : mesmo pedido
+else nova compra
+ServicoPedido -> PostgreSQL : bloquear produtos por ID e revalidar
+alt preço mudou ou estoque insuficiente
+PostgreSQL --> ServicoPedido : rollback e motivo
+ServicoPedido --> App : revisar resumo ou sacola
+else dados válidos
+ServicoPedido -> PostgreSQL : reservar, inserir pedido + itens + histórico
+ServicoPedido -> PostgreSQL : limpar carrinho e commit
+end
+end
+end
+opt pedido criado ou recuperado e elegível
+ServicoPedido -> ServicoPagamento : iniciar ou recuperar tentativa
+ServicoPagamento -> PostgreSQL : persistir tentativa idempotente
+ServicoPagamento -> Provedor : solicitar cobrança (fora da transação)
+Provedor --> ServicoPagamento : instruções ou resultado incerto
+ServicoPedido --> App : número e situação
+end
+... retorno assíncrono ...
+Provedor -> ServicoPagamento : evento assinado
+ServicoPagamento -> ServicoPagamento : validar assinatura, valor e referência
+group transação de conciliação
+ServicoPagamento -> PostgreSQL : bloquear pedido, deduplicar evento
+alt aprovado com reserva válida
+ServicoPagamento -> PostgreSQL : baixar estoque + confirmar + histórico
+else recusado ou pendente
+ServicoPagamento -> PostgreSQL : atualizar tentativa, manter pedido pendente
+else aprovação tardia
+ServicoPagamento -> PostgreSQL : manter cancelado e marcar estorno pendente
+end
+end
+opt estorno necessário
+ServicoPagamento -> Provedor : solicitar estorno idempotente fora da transação
+end
+@enduml
+
+@startuml atividades_compra
+start
+:Consultar catálogo;
+:Escolher produto e quantidade;
+if (Disponível?) then (não)
+ :Informar indisponibilidade;
+ stop
+else (sim)
+ :Montar sacola sem reservar estoque;
+endif
+if (Cliente autenticado?) then (não)
+ :Acessar ou cadastrar;
+ :Reconciliar sacolas;
+endif
+:Informar endereço;
+if (Dados e área válidos?) then (não)
+ :Mostrar erros sem apagar campos;
+ stop
+endif
+:Revisar itens, taxa e total;
+:Revalidar em transação;
+if (Alteração de preço ou disponibilidade?) then (sim)
+ :Voltar ao resumo e pedir nova confirmação;
+ stop
+endif
+:Criar pedido pendente e reservar;
+:Solicitar pagamento;
+if (Aprovado antes do vencimento?) then (sim)
+ :Baixar estoque e confirmar;
+ :Preparar, despachar e entregar;
+ stop
+else (não)
+ if (Reserva expirada?) then (sim)
+  :Cancelar e liberar reserva uma vez;
+  :Conciliar eventual aprovação tardia e estorno;
+ else (não)
+  :Manter pedido e permitir consulta ou tentativa elegível;
+ endif
+ stop
+endif
+@enduml
